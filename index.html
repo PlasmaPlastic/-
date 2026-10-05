@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>우주 태양광 경제성 시뮬레이터 - v2 최적화</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>우주 태양광 경제성 최적화 v2</h1>
+  <p>E₁ = A·η·G·365·PR·(1+γΔT) | LCOE = ΣCₜ/(1+r)^t / ΣEₜ/(1+r)^t | NPV = Σ(Vₜ-Mₜ)/(1+r)^t - CAPEX</p>
+</header>
+
+<div class="container">
+  <!-- ① 입력 패널 -->
+  <div class="card">
+    <h2>① 시뮬레이션 입력 + 경제 변수</h2>
+    
+    <label>고도 (altitude_km)</label>
+    <input id="altitude" type="number" value="500">
+    <label>경사각 (inclination_deg)</label>
+    <input id="inclination" type="number" value="45">
+    <label>RAAN / 초기위상</label>
+    <div class="row2"><input id="raan" type="number" value="0"><input id="initPhase" type="number" value="0"></div>
+    <label>패널 방향 / 면적 (m²)</label>
+    <div class="row2"><input id="panelOri" type="number" value="0"><input id="panelArea" type="number" value="20"></div>
+
+    <label>태양전지 셀 타입 (가격 포함)</label>
+    <select id="cellType"></select>
+
+    <label>시뮬 기간 (days) / dt (sec) / 일사량 (W/m²)</label>
+    <div class="row"><input id="duration" type="number" value="1" step="0.1"><input id="dt" type="number" value="60"><input id="irradiance" type="number" value="1361"></div>
+
+    <label>PR (성능비) / 전기요금 ($/kWh) / 전기요금 상승률 (%/년)</label>
+    <div class="row"><input id="pr" type="number" value="0.8" step="0.05"><input id="elecPrice" type="number" value="0.15" step="0.01"><input id="elecGrowth" type="number" value="3"></div>
+
+    <label>할인율 r (%) / 운영수명 (년) / 연간 유지비 ($)</label>
+    <div class="row"><input id="discountRate" type="number" value="5"><input id="lifetime" type="number" value="25"><input id="maintenance" type="number" value="500"></div>
+    <label style="display:flex; gap:6px; align-items:center; margin-top:4px"><input id="maintPercent" type="checkbox" style="width:auto"> 유지비를 CAPEX의 %로 계산</label>
+    <input id="maintPercentVal" type="number" value="2" placeholder="CAPEX의 %">
+
+    <label>발사비 ($/kg) / 설치비 ($) / 인버터비 ($)</label>
+    <div class="row"><input id="launchCost" type="number" value="20000"><input id="installCost" type="number" value="5000"><input id="inverterCost" type="number" value="3000"></div>
+
+    <button id="runSimBtn" style="width:100%; margin-top:14px;">일반 시뮬레이션 + 경제 분석 (SIM)</button>
+
+
+    <div class="formula-box usage-guide" style="margin-top:12px">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+        <b style="font-size:0.82rem; color:#7dd3fc">📘 계산식 사용 방법 가이드</b>
+        <span style="font-size:0.65rem; color:#64748b; background:#1e293b; padding:2px 6px; border-radius:10px">클릭해서 펼치기</span>
+      </div>
+
+      <details open>
+        <summary><span class="f-num">①</span> E₁ = A·η·G·365·PR·(1+γΔT) <span class="f-tag">연간 발전량</span></summary>
+        <div class="f-body">
+          <div class="f-desc"><b>무슨 공식?</b> 1년 동안 패널이 뽑을 수 있는 에너지의 이론 최대치. 궤도에서 실제로는 Eclipse 때문에 더 작아져서 시뮬 평균전력으로도 한번 더 계산해 비교함.</div>
+          <table class="f-table">
+            <tr><th>변수</th><th>의미</th><th>시뮬에서 어디?</th></tr>
+            <tr><td>A</td><td>패널 면적 m²</td><td>패널 면적 입력</td></tr>
+            <tr><td>η</td><td>셀 효율 (eta0)</td><td>셀 타입 선택하면 자동 - 예: Si 22%, III-V 32%</td></tr>
+            <tr><td>G</td><td>일사량 W/m²</td><td>일사량 입력 (우주=1361, 지상=1000)</td></tr>
+            <tr><td>PR</td><td>성능비 (손실계수)</td><td>PR 입력 0.8 기본</td></tr>
+            <tr><td>γ</td><td>온도계수 beta</td><td>셀 DB에 내장 (-0.0021 ~ -0.0045)</td></tr>
+            <tr><td>ΔT</td><td>온도차 (T-25°C)</td><td>시뮬 열 모델에서 자동 계산된 평균온도</td></tr>
+          </table>
+          <div class="f-howto">
+            <b>사용법:</b> 면적 20m², Si(η22%), G1361, PR0.8, γ-0.0045, ΔT 30K면<br>
+            <code>E₁ = 20×0.22×1361×365×0.8×(1-0.0045×30) /1000 ≈ 1,520 kWh/년</code><br>
+            실제 시뮬에서는 avg_power × 24×365 /1000 으로도 계산해서 두 값을 결과창에 같이 보여줌.
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary><span class="f-num">②</span> E(t)=E₁·(1-d)^(t-1) <span class="f-tag">열화 반영 발전량</span></summary>
+        <div class="f-body">
+          <div class="f-desc"><b>무슨 공식?</b> 매년 패널이 조금씩 망가지는 걸 반영. t년차 발전량은 첫해의 (1-열화율) 거듭제곱.</div>
+          <table class="f-table">
+            <tr><th>변수</th><th>의미</th><th>시뮬에서 어디?</th></tr>
+            <tr><td>d</td><td>연간 열화율</td><td>셀마다 다름 - Perovskite 2%, Si 0.7%, III-V 0.5%</td></tr>
+            <tr><td>t</td><td>운영 연차 1~N</td><td>수명 입력 (15~25년)</td></tr>
+          </table>
+          <div class="f-howto">
+            <b>사용법:</b> Si d=0.007이면 10년차는<br>
+            <code>E(10)=E₁×(0.993)^9 ≈ E₁×0.939 (6.1% 감소)</code><br>
+            결과창의 25년 곡선 그래프에서 Perovskite가 빨리 떨어지는 걸 바로 확인할 수 있음. 장기 임무면 d가 낮은 III-V/HJT 선택.
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary><span class="f-num">③</span> LCOE = ΣCₜ/(1+r)^t / ΣEₜ/(1+r)^t <span class="f-tag">균등화 발전비용</span></summary>
+        <div class="f-body">
+          <div class="f-desc"><b>무슨 공식?</b> 평생 동안 1kWh 뽑는데 진짜 얼마 드는지. 낮을수록 좋은 전지. 모든 비용과 발전을 할인율 r로 현재가치화해서 나눈 것.</div>
+          <table class="f-table">
+            <tr><th>변수</th><th>의미</th><th>시뮬에서 어디?</th></tr>
+            <tr><td>Cₜ</td><td>t년차 비용</td><td>t=0: CAPEX+생산비+발사비+설치, t>0: 유지비</td></tr>
+            <tr><td>Eₜ</td><td>t년차 발전량</td><td>위의 E(t)</td></tr>
+            <tr><td>r</td><td>할인율</td><td>할인율 입력 5% 기본 - 높을수록 미래 가치 낮게 봄</td></tr>
+          </table>
+          <div class="f-howto">
+            <b>사용법:</b> 결과의 [비용 구조]에서 확인.<br>
+            <code>LCOE $0.08/kWh</code>인데 전기요금이 $0.15면 이득. 전기요금보다 LCOE가 낮아야 경제성 있음.<br>
+            <b>팁:</b> 발사비 $/kg가 20000에서 5000으로 떨어지면 LCOE가 절반으로 떨어지는 걸 시뮬에서 바로 볼 수 있음. 단일 전지 최적화에서 objective를 <code>최소 LCOE</code>로 놓고 돌리면 LCOE가 가장 낮은 고도/경사를 찾아줌.
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary><span class="f-num">④</span> NPV = Σ(Vₜ-Mₜ)/(1+r)^t - CAPEX <span class="f-tag">순현재가치 - 최종 결론</span></summary>
+        <div class="f-body">
+          <div class="f-desc"><b>무슨 공식?</b> 이 사업이 평생 동안 벌어들이는 순이익을 지금 돈으로 환산. NPV>0이면 투자할 가치 있음. 이 시뮬의 최종 결론 지표.</div>
+          <table class="f-table">
+            <tr><th>변수</th><th>의미</th><th>시뮬에서 어디?</th></tr>
+            <tr><td>Vₜ</td><td>t년차 경제적 가치</td><td>Eₜ × 전기요금 × (1+상승률)^(t-1)</td></tr>
+            <tr><td>Mₜ</td><td>유지비</td><td>연간 유지비 입력 또는 CAPEX %</td></tr>
+            <tr><td>CAPEX</td><td>초기 투자</td><td>패널+생산+발사+설치+인버터 합계</td></tr>
+          </table>
+          <div class="f-howto">
+            <b>사용법 - 워크플로우:</b><br>
+            1. <code>SIM 실행</code> → 결과에서 NPV, 회수기간 확인<br>
+            2. NPV가 음수면? 전기요금 올려보거나 발사비 낮춰서 민감도 분석 (결과창 [가치 변동] 테이블)<br>
+            3. <code>① 단일 전지 최적화</code> → objective를 <code>최대 NPV</code>로 → 가장 돈 많이 버는 궤도 찾음<br>
+            4. <code>② 전체 셀 비교</code> → 현재 환경에서 8개 셀 중 NPV 1등 확인<br>
+            5. <code>각 셀의 최적 환경 찾기</code> → 셀별로 가장 잘 버는 고도/경사 확인 → "Si는 500km 45°에서 최고, Perovskite는 저고도 단기 임무에서 최고" 같은 결론 도출<br>
+            <code>NPV = $12,340, 회수 6.2년</code>이면 6.2년 이후부터 순수익.
+          </div>
+        </div>
+      </details>
+
+      <div style="margin-top:10px; padding:8px; background:rgba(56,189,248,0.06); border-radius:6px; font-size:0.68rem; color:#94a3b8">
+        <b style="color:#bae6fd">💡 빠른 사용 팁:</b><br>
+        • 가격은 셀 이름 옆에 바로 표시됨 (예: Perovskite - $95/m²)<br>
+        • 모든 결과는 [② 결과 패널]에 INPUT+OUTPUT 같이 저장되어 TXT로 다운 가능<br>
+        • 최적화는 Type A=한 전지의 최고 효율 궤도, Type B=여러 전지 중 환경별 최고 전지
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ② 시각화 및 결과 패널 -->
+  <div class="card">
+    <h2>② 시각화 및 결과 (INPUT+OUTPUT 결론 포함)</h2>
+    <canvas id="chart" height="200"></canvas>
+    <div id="status">시뮬레이션을 준비 중입니다.</div>
+    <div id="resultBox"></div>
+    <div class="button-group">
+      <button id="downloadSimResult" class="secondary">시뮬 결과 TXT</button>
+      <button id="downloadSimTimeseries" class="secondary">시계열 TXT</button>
+      <button id="downloadOptResult" class="secondary">최적화 TXT</button>
+      <button id="downloadAll" class="secondary">전체 기록</button>
+    </div>
+  </div>
+
+  <!-- ③ 최적화 패널 - 2종 -->
+  <div class="card">
+    <h2>③ 최적화 시스템 2종</h2>
+
+    <div style="background:#020617; border:1px solid #1e293b; border-radius:8px; padding:10px; margin-bottom:12px">
+      <div style="font-size:0.8rem; font-weight:700; color:#7dd3fc; margin-bottom:8px">① 단일 전지 최적화 - 최고 효율/경제성</div>
+      <label>목적함수 (objective)</label>
+      <select id="objectiveSelect">
+        <option value="max_power">최대 평균전력</option>
+        <option value="max_npv" selected>최대 NPV (경제성)</option>
+        <option value="min_lcoe">최소 LCOE</option>
+        <option value="max_value">최대 누적 가치</option>
+      </select>
+      <label>알고리즘</label>
+      <select id="algoSelect">
+        <option value="grid_search">Grid Search</option>
+        <option value="brute_force">Brute Force</option>
+        <option value="random_search">Random Search</option>
+        <option value="genetic" selected>Genetic Algorithm</option>
+        <option value="pso">Particle Swarm (PSO)</option>
+        <option value="bayesian">Bayesian Optimization</option>
+      </select>
+      <label>고도 범위 (min,max,step)</label>
+      <div class="row"><input id="altMin" value="400"><input id="altMax" value="700"><input id="altStep" value="50"></div>
+      <label>경사 범위</label>
+      <div class="row"><input id="incMin" value="0"><input id="incMax" value="60"><input id="incStep" value="15"></div>
+      <label>패널 방향 범위</label>
+      <div class="row"><input id="oriMin" value="0"><input id="oriMax" value="90"><input id="oriStep" value="15"></div>
+      <button id="runOptBtn" style="width:100%; margin-top:10px;">단일 전지 최적화 실행 (OPT)</button>
+      <div style="font-size:0.68rem; color:#64748b; margin-top:6px">현재 선택된 셀 1개에 대해 고도/경사/방향을 최적화하여 최고 효율/NPV를 찾음</div>
+    </div>
+
+    <div style="background:#0f141e; border:1px solid #1e293b; border-radius:8px; padding:10px; margin-bottom:12px">
+      <div style="font-size:0.8rem; font-weight:700; color:#22d3ee; margin-bottom:8px">② 전체 전지 비교 - 환경별 최적 전지</div>
+      <button id="runAllCellsBtn" style="width:100%; background:linear-gradient(135deg,#06b6d4,#0891b2)">▶ 전체 셀 비교 (현재 환경에서 어떤 전지가 최고?)</button>
+      <div style="font-size:0.68rem; color:#64748b; margin:6px 0 10px">현재 고도/경사/면적 조건에서 8개 셀 모두 시뮬 + 경제 계산, NPV 기준 랭킹</div>
+      <button id="runPerCellOptBtn" style="width:100%;" class="secondary">▶ 각 셀의 최적 환경 찾기 (셀별 최적 고도/경사)</button>
+      <div style="font-size:0.68rem; color:#64748b; margin-top:6px">각 셀 타입별로 Random 80회씩 최적화, 그 셀이 가장 잘 작동하는 환경을 찾음 → 어떤 환경에서 어떤 전지가 좋은지</div>
+    </div>
+
+    <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="border:none; margin:0; padding:0; font-size:0.85rem">자동저장 기록</h2>
+      <button id="clearHistory" class="danger">삭제</button>
+    </div>
+    <div id="historyList"></div>
+  </div>
+</div>
+
+<script src="physics.js"></script>
+<script src="economics.js"></script>
+<script src="optimizer.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
